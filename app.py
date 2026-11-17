@@ -63,8 +63,39 @@ with market_tab:
         shown=df[df['sport'].isin(selected)].copy()
         query=st.text_input('Search teams, markets or tickers')
         if query:shown=shown[shown['title'].str.contains(query,case=False,na=False,regex=False)|shown['ticker'].str.contains(query,case=False,na=False,regex=False)]
-        st.dataframe(shown[['sport','title','yes_ask','volume','ticker','event_ticker','close_time','market_at']],hide_index=True,use_container_width=True)
-        st.download_button('Export market snapshot',shown.to_csv(index=False),'kalshi_all_sports_snapshot.csv','text/csv')
+        plays_tab,technical_tab=st.tabs(['🎯 Plays & payouts','🔎 Market details'])
+        with plays_tab:
+            st.caption('Prices imply break-even odds, NOT a model-estimated chance of winning. All returns are before fees. No picks are certified favorable.')
+            stake=st.number_input('Example budget ($)',min_value=1.0,max_value=100000.0,value=10.0,step=5.0)
+            shown=shown.sort_values(['sport','title'])
+            st.caption(f'{len(shown)} quoted YES markets • Showing first 100; use filters to narrow results')
+            for _,r in shown.head(100).iterrows():
+                price=float(r['yes_ask'])
+                if not 0<price<1:continue
+                # Kalshi YES contracts settle for $1; show an affordable whole-contract example.
+                contracts=int((stake+1e-9)//price)
+                cost=contracts*price
+                payout=float(contracts)
+                profit=payout-cost
+                roi=(profit/cost*100) if cost else 0
+                with st.container(border=True):
+                    st.markdown(f"**{r['title']}**")
+                    st.caption(str(r['sport']))
+                    a,b,c=st.columns(3)
+                    a.metric('YES price / implied odds',f'{price*100:.1f}¢ / {price*100:.1f}%')
+                    if contracts:
+                        b.metric('Gross payout',f'${payout:,.2f}')
+                        c.metric('Potential profit',f'${profit:,.2f}',f'({roi:.1f}% before fees)',delta_color='off')
+                        st.caption(f'Example: {contracts} whole contracts costing ${cost:.2f} of your ${stake:.2f} budget; pays ${payout:.2f} only if YES wins. Fees excluded.')
+                    else:
+                        b.metric('Gross payout','—')
+                        c.metric('Potential profit','—')
+                        st.caption('Budget too small for one contract at the displayed price.')
+            if len(shown)>100:st.info('Only the first 100 matches are displayed. Narrow the sport or search to see more.')
+        with technical_tab:
+            st.caption('Raw market information for auditing and troubleshooting.')
+            st.dataframe(shown[['sport','title','yes_ask','volume','ticker','event_ticker','close_time','market_at']],hide_index=True,use_container_width=True)
+            st.download_button('Export market snapshot',shown.to_csv(index=False),'kalshi_all_sports_snapshot.csv','text/csv')
     else:st.info('Press Scan Kalshi sports markets to begin. No demo markets are substituted for missing live data.')
 
 with review_tab:

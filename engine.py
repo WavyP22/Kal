@@ -75,23 +75,3 @@ def combos(rows,size=2,limit=100):
         out.append({'legs':' + '.join(r.get('title','?') for r in group),'probability_low':result.get('p_conservative'),'probability_mid':result.get('p_central'),'status':result['status'],'issues':'; '.join(result['issues'])})
         if len(out)>=limit:break
     return sorted(out,key=lambda x:x['probability_low'] or 0,reverse=True)
-def market_price(market):
-    """Return a market's YES price as a probability."""
-    for key in ("yes_ask_dollars", "yes_ask"):
-        value = market.get(key)
-
-        if value is None or value == "":
-            continue
-
-        try:
-            price = float(value)
-
-            if key == "yes_ask":
-                price /= 100
-
-            if 0 <= price <= 1:
-                return price
-        except (TypeError, ValueError):
-            continue
-
-    return None
