@@ -1,23 +1,19 @@
-# Kalshi Guard v5 — All Sports Discovery
+# Kalshi Guard v7 — local-day sports research
 
-Read-only Streamlit research dashboard. Uses Kalshi public API to discover Sports-category series and fetch open event markets. **Does not automatically recommend picks.** Sports discovery and market scan are bounded by user-selected limits; errors and incomplete coverage are shown. No account connection or trades.
+Deploy `app.py` in Streamlit Community Cloud. Upload all files in this ZIP to the repository root, replacing matching files. Run `pip install -r requirements.txt` and `streamlit run app.py` locally.
 
-## Deploy on your existing Streamlit Cloud app
+## Changes
+- Today (default), Tomorrow and Choose a date, based on a manually selected time zone (Eastern default).
+- Only markets with an explicit timezone-aware `scheduled_start_time` or event `start_time` are included in date-filtered plays and combos. Markets without these fields appear under Unverified start times. Kalshi may not provide these fields for many or most markets, so **Today's Plays may be empty even when sports markets are active**.
+- Sport/league filters; separate market details; synthetic 2–6 pick same-day cross-event combinations.
 
-1. Extract this ZIP and upload `app.py`, `discovery.py`, `engine.py`, `requirements.txt`, `test_discovery.py` to your existing GitHub repository, at the root. Overwrite old files when prompted.
-2. Streamlit Cloud should redeploy from the repository. Main file path remains `app.py`.
-3. Open the app, select **All-sports scan** and click **Scan Kalshi sports markets**.
-4. Filter the results and download CSV. The other tabs support manual research only.
+## Critical limitations
+- Game start time is **not** inferred from market closing or settlement times. A present start field is not independently validated against official sports schedules.
+- Market prices are not model-derived win probabilities. Combo multiplication assumes independence and is NOT an executable Kalshi quote. There is no actual combo trade verification, injury/news feed, profitability verification, or trade placement.
+- Scan is bounded by pagination/series caps; incomplete coverage is possible. Device timezone is NOT automatically detected; select it manually in the sidebar.
+- If no games appear, inspect Unverified start times. Never assume an empty Today tab means there are no games today.
 
-## Local run
+Run tests: `python -m unittest discover -v`.
 
-```bash
-pip install -r requirements.txt
-streamlit run app.py
-python -m unittest test_discovery -v
-```
-
-
-## Limits
-
-Kalshi may change endpoint schema, categories, pagination, or access. A successful scan does not prove full market coverage. Missing prices are not fabricated. Injuries, lineups, news, calibrated probabilities and executable combo quotes are **not integrated**. Never treat a manually entered probability as independently validated.
+## v7.1 Game start schedule improvement
+When Kalshi doesn't expose a timezone-aware scheduled game start, the app attempts to cross-check NBA, WNBA, CBB, WCBB, NFL, NCAAF, MLB, NHL and MLS games against ESPN's public scoreboard. It requires a unique matchup with **both complete team names** present in the Kalshi event/title fields. Ambiguous or unsupported games stay in Unverified Start Times. ESPN's endpoint is unofficial and may be unavailable; no market close time is substituted. The date filter uses the selected time zone. This is not a guarantee of complete coverage or live deployment.

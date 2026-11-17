@@ -18,6 +18,6 @@ def candidates(rows, size, budget=10, max_rows=30, max_results=25):
         p=prod(float(r['yes_ask']) for r in group)
         # Illustrative synthetic price only. No actual Kalshi combo quote.
         gross=budget/p
-        out.append({'plays':' + '.join(str(r['title']) for r in group), 'levels':' / '.join(str(r.get('level','')) for r in group), 'legs':size,'synthetic_implied_probability':p,'hypothetical_gross_payout':gross,'hypothetical_profit':gross-budget,'hypothetical_roi_pct':(gross/budget-1)*100,'status':'UNVERIFIED — NOT A FAVORABLE PICK','tickers':' | '.join(r['ticker'] for r in group)})
+        out.append({'plays':' + '.join(str(r['title']) for r in group), 'levels':' / '.join(str(r.get('level','')) for r in group), 'legs':size,'synthetic_implied_probability':p,'hypothetical_gross_payout':gross,'hypothetical_profit':gross-budget,'hypothetical_roi_pct':(gross/budget-1)*100,'status':'UNVERIFIED — NOT A FAVORABLE PICK','tickers':' | '.join(r['ticker'] for r in group), 'legs_detail':[{'title':r['title'],'ticker':r['ticker'],'event_ticker':r['event_ticker'],'yes_ask':r['yes_ask'],'category':r.get('category',''),'level':r.get('level',''),'game_start_time':r.get('game_start_time','')} for r in group]})
         if len(out)>=max_results:break
     return out

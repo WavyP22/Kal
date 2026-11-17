@@ -1,214 +1,139 @@
 import json
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 import requests
 import pandas as pd
 import streamlit as st
-from datetime import datetime, timezone
 from discovery import sports_series,scan_series
-from engine import gate,evaluate,combos
 from classify import classify
 from smart import candidates
+from datefilter import TIMEZONES,day_scope,local_day
+from schedule import enrich_start_times
 
-st.set_page_config(page_title='Kalshi Guard v5 — All Sports',page_icon='🛡️',layout='wide')
-st.title('🛡️ Kalshi Guard v6 | Sports & Combos')
-st.caption('Read-only public market research • Android-friendly • No trading account or API key')
-st.warning('NOT AN AUTOMATIC PICK FINDER. Prices are not predictions. Injuries/news, calibrated models, and executable combo quotes are not connected. No verified favorable plays are generated.')
-
-with st.sidebar:
-    st.header('Scan controls')
-    series_pages=st.slider('Sports series discovery pages',1,20,5)
-    series_cap=st.slider('Maximum series to scan',5,200,60,5)
-    event_pages=st.slider('Event pages per series',1,5,2)
-    st.caption('Higher limits mean more API requests. A capped scan is not full coverage.')
-    if st.button('Clear cached results'):
-        discover.clear();scan.clear()
-    st.markdown('[Kalshi public API documentation](https://docs.kalshi.com/)')
+st.set_page_config(page_title='Kalshi Guard v7.1',page_icon='🛡️',layout='wide')
+st.title('🛡️ Kalshi Guard v7.1')
+st.caption('Sports markets • Local-day filtering • 2–6 leg research combos • Read-only')
+st.warning('Research only. No independent probability model, injury verification, executable combo quotes, or trade placement. Synthetic combo prices are NOT Kalshi offers.')
 
 @st.cache_data(ttl=600,show_spinner=False)
 def discover(pages):
-    with requests.Session() as session:return sports_series(session,pages)
-
+    with requests.Session() as s:return sports_series(s,pages)
 @st.cache_data(ttl=120,show_spinner=False)
-def scan(series,max_pages,max_series):
-    with requests.Session() as session:return scan_series(session,series,max_pages,max_series)
+def scan(series,pages,cap):
+    with requests.Session() as s:return scan_series(s,series,pages,cap)
 
-market_tab,smart_tab,review_tab,combo_tab,about_tab=st.tabs(['🎯 Plays by sport','🧠 Smart combos (2–6)','🩺 Evidence review','🧮 Manual scenarios','ℹ️ Details'])
-with market_tab:
-    if st.button('Scan Kalshi sports markets',type='primary'):
-        with st.spinner('Discovering sports series and retrieving public markets...'):
-            series,disc=discover(series_pages)
-            st.session_state['series']=series
-            st.session_state['discovery']=disc
-            if series:
-                rows,coverage=scan(series,event_pages,series_cap)
-                st.session_state['rows']=rows
-                st.session_state['coverage']=coverage
-            else:
-                st.session_state['rows']=[]
-                st.session_state['coverage']={'errors':['No Sports series returned; API schema or availability may differ']}
-    disc=st.session_state.get('discovery',{})
-    coverage=st.session_state.get('coverage',{})
-    rows=st.session_state.get('rows',[])
-    if disc or coverage:
-        a,b,c=st.columns(3)
-        a.metric('Sports series discovered',len(st.session_state.get('series',[])))
-        b.metric('Series scanned',coverage.get('series_scanned',0))
-        c.metric('Quoted markets returned',len(rows))
-        if disc.get('truncated') or coverage.get('series_capped'):
-            st.warning('PARTIAL COVERAGE: Scan limits reached. Do not interpret results as every sports market.')
-        if disc.get('errors') or coverage.get('errors'):
-            st.error('Some requests failed. Coverage incomplete. '+ '; '.join((disc.get('errors',[])+coverage.get('errors',[]))[:5]))
-        st.caption('Sports discovery relies on Kalshi series metadata. The API can change, and no scan guarantees every sports market. Open markets without valid quoted asks are omitted.')
-    if rows:
-        df=pd.DataFrame(rows)
-        df[['category','level']]=pd.DataFrame([classify(r) for r in rows],index=df.index)
-        sports=sorted(df['category'].dropna().unique())
-        selected=st.selectbox('Sport', ['All sports']+sports)
-        filtered=df if selected=='All sports' else df[df['category']==selected]
-        levels=sorted(filtered['level'].dropna().unique())
-        level=st.selectbox('Level / league', ['All levels']+levels)
-        shown=filtered if level=='All levels' else filtered[filtered['level']==level]
-        shown=shown.copy()
-        query=st.text_input('Search teams, markets or tickers')
-        if query:shown=shown[shown['title'].str.contains(query,case=False,na=False,regex=False)|shown['ticker'].str.contains(query,case=False,na=False,regex=False)]
-        plays_tab,technical_tab=st.tabs(['🎯 Plays & payouts','🔎 Market details'])
-        with plays_tab:
-            st.caption('Prices imply break-even odds, NOT a model-estimated chance of winning. All returns are before fees. No picks are certified favorable.')
-            stake=st.number_input('Example budget ($)',min_value=1.0,max_value=100000.0,value=10.0,step=5.0)
-            shown=shown.sort_values(['category','level','title'])
-            st.caption(f'{len(shown)} quoted YES markets • Showing first 100; use filters to narrow results')
-            for _,r in shown.head(100).iterrows():
-                price=float(r['yes_ask'])
-                if not 0<price<1:continue
-                # Kalshi YES contracts settle for $1; show an affordable whole-contract example.
-                contracts=int((stake+1e-9)//price)
-                cost=contracts*price
-                payout=float(contracts)
-                profit=payout-cost
-                roi=(profit/cost*100) if cost else 0
-                with st.container(border=True):
-                    st.markdown(f"**{r['title']}**")
-                    st.caption(f"{r['category']}  •  {r['level']}")
-                    a,b,c=st.columns(3)
-                    a.metric('YES price / implied odds',f'{price*100:.1f}¢ / {price*100:.1f}%')
-                    if contracts:
-                        b.metric('Gross payout',f'${payout:,.2f}')
-                        c.metric('Potential profit',f'${profit:,.2f}',f'({roi:.1f}% before fees)',delta_color='off')
-                        st.caption(f'Example: {contracts} whole contracts costing ${cost:.2f} of your ${stake:.2f} budget; pays ${payout:.2f} only if YES wins. Fees excluded.')
-                    else:
-                        b.metric('Gross payout','—')
-                        c.metric('Potential profit','—')
-                        st.caption('Budget too small for one contract at the displayed price.')
-            if len(shown)>100:st.info('Only the first 100 matches are displayed. Narrow the sport or search to see more.')
-        with technical_tab:
-            st.caption('Raw market information for auditing and troubleshooting.')
-            st.dataframe(shown[['category','level','sport','title','yes_ask','volume','ticker','event_ticker','close_time','market_at']],hide_index=True,use_container_width=True)
-            st.download_button('Export market snapshot',shown.to_csv(index=False),'kalshi_all_sports_snapshot.csv','text/csv')
-    else:st.info('Press Scan Kalshi sports markets to begin. No demo markets are substituted for missing live data.')
+with st.sidebar:
+    st.header('Settings')
+    tz_label=st.selectbox('Time zone',list(TIMEZONES),index=0,help='Choose the time zone of your device. Eastern is the default; browser auto-detection is not available in this version.')
+    tz=TIMEZONES[tz_label]
+    today=datetime.now(ZoneInfo(tz)).date()
+    st.caption(f'Local date: {today.isoformat()} • {tz}')
+    day_choice=st.radio('Game date',['Today','Tomorrow','Choose a date'],index=0)
+    chosen=today if day_choice=='Today' else today+timedelta(days=1) if day_choice=='Tomorrow' else st.date_input('Select date',value=today,min_value=today-timedelta(days=1),max_value=today+timedelta(days=30))
+    st.caption(f'Showing starts on {chosen.isoformat()} (midnight to midnight local time).')
+    series_pages=st.slider('Discovery pages',1,20,5)
+    series_cap=st.slider('Maximum series',5,200,60,5)
+    event_pages=st.slider('Event pages per series',1,5,2)
+    if st.button('Clear cached scan'):
+        discover.clear();scan.clear();st.session_state.pop('rows',None)
+    st.caption('Scan limits can omit markets. Missing game starts are cross-checked against ESPN schedules using exact two-team matchups; ambiguous matches remain excluded.')
 
-with smart_tab:
-    st.subheader('Smart combos | 2 to 6 plays')
-    st.warning('RESEARCH ONLY: These combinations use multiplied single-market ask prices, NOT actual Kalshi combo quotes. They do not use independent win predictions or verified injury/news feeds. They are NOT favorable-play recommendations.')
-    rows=st.session_state.get('rows',[])
-    if not rows:
-        st.info('Scan sports markets on the Plays tab first.')
-    else:
-        annotated=[]
-        for r in rows:
-            category,level=classify(r)
-            annotated.append({**r,'category':category,'level':level})
-        categories=sorted({r['category'] for r in annotated})
-        sport=st.selectbox('Combo sport', ['All sports']+categories,key='combo_sport')
-        scoped=[r for r in annotated if sport=='All sports' or r['category']==sport]
-        levels=sorted({r['level'] for r in scoped})
-        level=st.selectbox('Combo level', ['All levels']+levels,key='combo_level')
-        scoped=[r for r in scoped if level=='All levels' or r['level']==level]
-        size=st.select_slider('Number of plays',options=[2,3,4,5,6],value=2)
-        stake=st.number_input('Illustrative stake ($)',min_value=1.0,value=10.0,step=5.0,key='combo_stake')
-        st.caption('Candidate pool limited to 30 markets and 25 results for speed. One leg per event; other correlations are not modeled. Prices can change.')
-        results=candidates(scoped,size,stake)
-        if not results:
-            st.info('Not enough distinct games with quoted prices for this combo size and filter.')
-        else:
-            for item in results:
-                with st.container(border=True):
-                    st.markdown('**'+item['plays']+'**')
-                    st.caption(item['levels']+' • Unverified synthetic scenario')
-                    a,b,c=st.columns(3)
-                    a.metric('Synthetic implied odds',f"{item['synthetic_implied_probability']:.1%}")
-                    b.metric('Hypothetical payout',f"${item['hypothetical_gross_payout']:,.2f}")
-                    c.metric('Profit (ROI)',f"${item['hypothetical_profit']:,.2f}",f"({item['hypothetical_roi_pct']:.1f}%)",delta_color='off')
-            st.download_button('Export scenarios',pd.DataFrame(results).to_csv(index=False),'kalshi_combo_scenarios.csv','text/csv')
+if st.button('🔄 Scan Kalshi sports markets',type='primary'):
+    with st.spinner('Discovering and scanning public sports markets…'):
+        series,disc=discover(series_pages)
+        rows,coverage=scan(series,event_pages,series_cap) if series else ([],{'errors':['No sports series returned']})
+        st.session_state.update(rows=rows,disc=disc,coverage=coverage,series_count=len(series))
 
-with review_tab:
-    rows=st.session_state.get('rows',[])
-    st.write('Manual evidence entry only. A user-provided URL is not independently verified. Every sport requires its own reliable sources and model.')
-    if not rows:st.info('Scan markets first.')
-    else:
-        choices={f"{r['sport']} | {r['title']} [{r['ticker']}]":r for r in rows}
-        label=st.selectbox('Select market',list(choices))
-        r=choices[label]
-        with st.form('review'):
-            lineup=st.selectbox('Lineup/participant status',['Unknown','Confirmed','Unconfirmed'])
-            injury=st.selectbox('Injury, suspension or absence review',['Unknown','Reviewed','Unresolved'])
-            news=st.selectbox('News and conditions review',['Unknown','Reviewed','Unresolved'])
-            url=st.text_input('Evidence source HTTPS URL')
-            model=st.selectbox('Independent model status',['Unvalidated','Validated'])
-            st.caption('Validated means independently backtested and calibrated; selecting it does not make it true.')
-            low=st.number_input('Lower probability %',1.0,99.0,40.0)
-            mid=st.number_input('Central probability %',1.0,99.0,50.0)
-            high=st.number_input('Upper probability %',1.0,99.0,60.0)
-            saved=st.form_submit_button('Save manual review')
-        if saved:
-            if low<=mid<=high:
-                st.session_state.setdefault('reviews',{})[r['ticker']]={**r,'lineup':lineup,'injury':injury,'news':news,'source_url':url,'evidence_at':datetime.now(timezone.utc).isoformat(),'model':model,'p_low':low/100,'p_mid':mid/100,'p_high':high/100}
-                st.success('Saved in this browser session. Not independently authenticated.')
-            else:st.error('Probabilities must satisfy lower ≤ central ≤ upper.')
-        reviews=list(st.session_state.get('reviews',{}).values())
-        if reviews:
-            st.dataframe(pd.DataFrame([{'market':x['title'],'sport':x['sport'],'data_quality_issues':'; '.join(gate(x)) or 'Format checks passed; external evidence still unverified'} for x in reviews]),hide_index=True,use_container_width=True)
-            st.download_button('Export evidence JSON',json.dumps(reviews,indent=2),'evidence.json','application/json')
+rows=st.session_state.get('rows',[])
+coverage=st.session_state.get('coverage',{})
+if coverage:
+    a,b,c=st.columns(3)
+    a.metric('Series discovered',st.session_state.get('series_count',0))
+    b.metric('Series scanned',coverage.get('series_scanned',0))
+    c.metric('Quoted markets',len(rows))
+    if coverage.get('series_capped') or st.session_state.get('disc',{}).get('truncated'):
+        st.warning('Partial scan: configured limits were reached.')
+    errors=coverage.get('errors',[])+st.session_state.get('disc',{}).get('errors',[])
+    if errors:st.error('Some API calls failed: '+'; '.join(errors[:3]))
+
+if not rows:
+    st.info('Press Scan Kalshi sports markets to load live public market data. No fake plays will be displayed.')
+    st.stop()
+
+annotated=[]
+for r in rows:
+    cat,level=classify(r)
+    annotated.append({**r,'category':cat,'level':level})
+with st.spinner('Checking game schedules for missing start times…'):
+    annotated=enrich_start_times(annotated,chosen,tz)
+verified,unknown,other=day_scope(annotated,tz,chosen)
+
+sport_names=sorted({r['category'] for r in verified})
+a,b=st.columns(2)
+with a:sport=st.selectbox('Sport',['All sports']+sport_names)
+scoped=[r for r in verified if sport=='All sports' or r['category']==sport]
+with b:level=st.selectbox('League / level',['All levels']+sorted({r['level'] for r in scoped}))
+scoped=[r for r in scoped if level=='All levels' or r['level']==level]
+
+plays_tab,combo_tab,unknown_tab,details_tab=st.tabs(['🎯 Day’s plays','🧠 Smart combos (2–6)','🕒 Unverified start times','🔎 Market details'])
+with plays_tab:
+    st.subheader(f'Games starting {chosen.strftime("%b %d, %Y")}')
+    st.caption(f'{len(scoped)} quoted markets • {tz} • A YES ask is a price, not a predicted win probability.')
+    stake=st.number_input('Budget ($)',min_value=1.0,value=10.0,step=5.0,key='play_budget')
+    search=st.text_input('Search plays')
+    display=[r for r in scoped if search.lower() in str(r.get('title','')).lower()]
+    for r in display[:100]:
+        p=float(r['yes_ask'])
+        if not 0<p<1:continue
+        contracts=int((stake+1e-9)//p)
+        cost=contracts*p;profit=contracts-cost
+        with st.container(border=True):
+            st.markdown('**'+str(r['title'])+'**')
+            dt=datetime.fromisoformat(r['game_start_time'].replace('Z','+00:00')).astimezone(ZoneInfo(tz))
+            st.caption(f"{r['category']} • {r['level']} • Starts {dt.strftime('%I:%M %p')}")
+            x,y,z=st.columns(3)
+            x.metric('YES price / implied',f'{p*100:.1f}¢ / {p*100:.1f}%')
+            y.metric('Gross payout',f'${contracts:.2f}' if contracts else '—')
+            z.metric('Profit (ROI)',f'${profit:.2f}' if contracts else '—',f'({(profit/cost*100):.1f}%)' if contracts else None,delta_color='off')
+            st.caption(f'{contracts} whole contracts • Cost ${cost:.2f} • Before fees • YES must win')
+    if len(display)>100:st.info('First 100 shown; narrow filters to see more.')
+    if not display:st.info('No games with verified start times match this date and filter. Check Unverified start times.')
 
 with combo_tab:
-    reviews=list(st.session_state.get('reviews',{}).values())
-    st.warning('These are hypothetical scenarios, NOT executable Kalshi combos or recommendations. Different games are not necessarily statistically independent.')
-    size=st.radio('Leg count',[2,3],horizontal=True)
-    if len(reviews)<size:st.info(f'Save at least {size} distinct-event reviews first.')
-    else:
-        options={f"{r['title']} [{r['ticker']}]":r for r in reviews}
-        chosen=st.multiselect('Select legs',list(options),max_selections=size)
-        stress=st.slider('Conservative joint probability haircut (percentage points)',0,25,5)/100
-        quote=st.checkbox('Enter a separate combo quote manually (not verified)')
-        if quote:
-            cost=st.number_input('Cost ($)',min_value=.01,value=10.0)
-            payout=st.number_input('Gross payout ($)',min_value=.01,value=25.0)
-            fees=st.number_input('Fees ($)',min_value=0.0,value=0.0)
-        else:cost=payout=None;fees=0
-        if len(chosen)==size:
-            result=evaluate([options[x] for x in chosen],cost,payout,fees,stress)
-            st.metric('Conservative scenario probability',f"{result.get('p_conservative',0):.1%}")
-            st.metric('Central scenario probability',f"{result.get('p_central',0):.1%}")
-            if 'ev_low' in result:st.metric('Illustrative conservative EV',f"${result['ev_low']:.2f}")
-            st.error('BLOCKED: No verified favorable play')
-            for issue in result['issues']:st.write('• '+issue)
-        if st.checkbox('Show scenario combinations'):
-            results=combos(reviews,size)
-            if results:
-                df=pd.DataFrame(results)
-                st.dataframe(df,hide_index=True,use_container_width=True)
-                st.download_button('Export scenario CSV',df.to_csv(index=False),'scenarios.csv','text/csv')
+    st.subheader(f'Same-day combos • {chosen.strftime("%b %d")}')
+    st.warning('Generated groups are hypothetical. This app does NOT confirm that Kalshi offers these combinations as one executable trade. Do not treat the synthetic payout as a real quote.')
+    n=st.select_slider('Number of picks',options=[2,3,4,5,6],value=2)
+    budget=st.number_input('Example combo budget ($)',min_value=1.0,value=10.0,step=5.0,key='combo_budget')
+    combos=candidates(scoped,n,budget)
+    if not combos:st.info('Not enough distinct events with verified same-day starts and quoted YES prices.')
+    for idx,item in enumerate(combos,1):
+        with st.container(border=True):
+            st.markdown(f'**Combo {idx} • {n} picks**')
+            for leg in item['legs_detail']:
+                st.write(f"• {leg['title']} — YES {float(leg['yes_ask'])*100:.1f}¢ ({leg['level']})")
+                st.caption('Market ticker: '+str(leg['ticker']))
+            x,y,z=st.columns(3)
+            x.metric('Synthetic implied',f"{item['synthetic_implied_probability']:.1%}")
+            y.metric('Hypothetical gross',f"${item['hypothetical_gross_payout']:.2f}")
+            z.metric('Hypothetical profit',f"${item['hypothetical_profit']:.2f}",f"({item['hypothetical_roi_pct']:.1f}%)",delta_color='off')
+            st.caption('Not a real Kalshi combo quote. Multiplication assumes independent legs; real prices, fees and correlations may differ.')
+    if combos:
+        export=[{k:v for k,v in c.items() if k!='legs_detail'} for c in combos]
+        st.download_button('Export combo research',pd.DataFrame(export).to_csv(index=False),'kalshi_v7_combo_research.csv','text/csv')
 
-with about_tab:
-    st.markdown('''### What this version actually does
-- Discovers series categorized **Sports** through the public Kalshi API, then retrieves a bounded sample of open events and quoted YES markets across those series.
-- Lets you filter and export the resulting market snapshot.
-- Supports manual evidence reviews and illustrative two-/three-leg scenario calculations.
+with unknown_tab:
+    st.subheader('Start time not verified')
+    st.info(f'{len(unknown)} quoted markets could not be matched to a verified scheduled game start. They are deliberately NOT included in Today, Tomorrow or combos.')
+    if unknown:
+        st.dataframe(pd.DataFrame(unknown)[['category','level','title','ticker','event_ticker','close_time']],hide_index=True,use_container_width=True)
+        st.download_button('Export unverified starts',pd.DataFrame(unknown).to_csv(index=False),'unverified_start_times.csv','text/csv')
+    st.caption('Market close_time and expiration_time are not reliable replacements for the scheduled game start.')
 
-### What it cannot do yet
-- Guarantee that **all** sports markets were discovered or scanned. Limits, API errors and missing ask quotes reduce coverage.
-- Automatically verify injuries, suspensions, starting lineups, weather or news across sports.
-- Estimate calibrated probabilities from a trained, independently tested model.
-- Obtain executable combo RFQ prices or certify positive expected value.
-- Place trades, access accounts or identify verified favorable picks.
-
-**All results are research-only.** Markets without usable quoted YES asks are omitted. No fallback or invented prices are used.
-''')
+with details_tab:
+    st.subheader('Raw market details')
+    st.caption('Includes markets from the selected day after sport/league filtering. Technical fields are hidden from the main plays view.')
+    if scoped:
+        st.dataframe(pd.DataFrame(scoped),hide_index=True,use_container_width=True)
+        st.download_button('Export selected markets',pd.DataFrame(scoped).to_csv(index=False),'kalshi_v7_markets.csv','text/csv')
+    st.write(f'Other-date markets: {len(other)} • Unverified start times: {len(unknown)}')
+    st.caption('No browser timezone auto-detection, verified injuries, independently calibrated odds, or actual combo trading is implemented.')

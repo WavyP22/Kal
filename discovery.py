@@ -50,7 +50,10 @@ def scan_series(session,series,max_pages=2,max_series=60):
                         'title':m.get('title') or event.get('title',''), 'yes_ask':price,
                         'volume':m.get('volume',0),'close_time':m.get('close_time',''),
                         'market_at':datetime.now(timezone.utc).isoformat(timespec='seconds'),
-                        'league':s.get('title') or ticker})
+                        'league':s.get('title') or ticker,
+                        'game_start_time': (m.get('scheduled_start_time') or event.get('scheduled_start_time') or event.get('start_time') or ''),
+                        'start_time_source': ('market.scheduled_start_time' if m.get('scheduled_start_time') else 'event.scheduled_start_time' if event.get('scheduled_start_time') else 'event.start_time' if event.get('start_time') else ''),
+                        'event_subtitle':event.get('sub_title',''), 'event_title':event.get('title','')})
             nxt=data.get('cursor')
             if not nxt or nxt==cursor:break
             cursor=nxt
