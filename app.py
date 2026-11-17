@@ -5,9 +5,11 @@ import streamlit as st
 from datetime import datetime, timezone
 from discovery import sports_series,scan_series
 from engine import gate,evaluate,combos
+from classify import classify
+from smart import candidates
 
 st.set_page_config(page_title='Kalshi Guard v5 — All Sports',page_icon='🛡️',layout='wide')
-st.title('🛡️ Kalshi Guard v5 | All Sports')
+st.title('🛡️ Kalshi Guard v6 | Sports & Combos')
 st.caption('Read-only public market research • Android-friendly • No trading account or API key')
 st.warning('NOT AN AUTOMATIC PICK FINDER. Prices are not predictions. Injuries/news, calibrated models, and executable combo quotes are not connected. No verified favorable plays are generated.')
 
@@ -29,7 +31,7 @@ def discover(pages):
 def scan(series,max_pages,max_series):
     with requests.Session() as session:return scan_series(session,series,max_pages,max_series)
 
-market_tab,review_tab,combo_tab,about_tab=st.tabs(['📡 All-sports scan','🩺 Evidence review','🧮 Combo scenarios','ℹ️ Coverage & limitations'])
+market_tab,smart_tab,review_tab,combo_tab,about_tab=st.tabs(['🎯 Plays by sport','🧠 Smart combos (2–6)','🩺 Evidence review','🧮 Manual scenarios','ℹ️ Details'])
 with market_tab:
     if st.button('Scan Kalshi sports markets',type='primary'):
         with st.spinner('Discovering sports series and retrieving public markets...'):
@@ -58,16 +60,21 @@ with market_tab:
         st.caption('Sports discovery relies on Kalshi series metadata. The API can change, and no scan guarantees every sports market. Open markets without valid quoted asks are omitted.')
     if rows:
         df=pd.DataFrame(rows)
-        sports=sorted(df['sport'].dropna().unique())
-        selected=st.multiselect('Filter sports/series',sports,default=sports)
-        shown=df[df['sport'].isin(selected)].copy()
+        df[['category','level']]=pd.DataFrame([classify(r) for r in rows],index=df.index)
+        sports=sorted(df['category'].dropna().unique())
+        selected=st.selectbox('Sport', ['All sports']+sports)
+        filtered=df if selected=='All sports' else df[df['category']==selected]
+        levels=sorted(filtered['level'].dropna().unique())
+        level=st.selectbox('Level / league', ['All levels']+levels)
+        shown=filtered if level=='All levels' else filtered[filtered['level']==level]
+        shown=shown.copy()
         query=st.text_input('Search teams, markets or tickers')
         if query:shown=shown[shown['title'].str.contains(query,case=False,na=False,regex=False)|shown['ticker'].str.contains(query,case=False,na=False,regex=False)]
         plays_tab,technical_tab=st.tabs(['🎯 Plays & payouts','🔎 Market details'])
         with plays_tab:
             st.caption('Prices imply break-even odds, NOT a model-estimated chance of winning. All returns are before fees. No picks are certified favorable.')
             stake=st.number_input('Example budget ($)',min_value=1.0,max_value=100000.0,value=10.0,step=5.0)
-            shown=shown.sort_values(['sport','title'])
+            shown=shown.sort_values(['category','level','title'])
             st.caption(f'{len(shown)} quoted YES markets • Showing first 100; use filters to narrow results')
             for _,r in shown.head(100).iterrows():
                 price=float(r['yes_ask'])
@@ -80,7 +87,7 @@ with market_tab:
                 roi=(profit/cost*100) if cost else 0
                 with st.container(border=True):
                     st.markdown(f"**{r['title']}**")
-                    st.caption(str(r['sport']))
+                    st.caption(f"{r['category']}  •  {r['level']}")
                     a,b,c=st.columns(3)
                     a.metric('YES price / implied odds',f'{price*100:.1f}¢ / {price*100:.1f}%')
                     if contracts:
@@ -94,9 +101,43 @@ with market_tab:
             if len(shown)>100:st.info('Only the first 100 matches are displayed. Narrow the sport or search to see more.')
         with technical_tab:
             st.caption('Raw market information for auditing and troubleshooting.')
-            st.dataframe(shown[['sport','title','yes_ask','volume','ticker','event_ticker','close_time','market_at']],hide_index=True,use_container_width=True)
+            st.dataframe(shown[['category','level','sport','title','yes_ask','volume','ticker','event_ticker','close_time','market_at']],hide_index=True,use_container_width=True)
             st.download_button('Export market snapshot',shown.to_csv(index=False),'kalshi_all_sports_snapshot.csv','text/csv')
     else:st.info('Press Scan Kalshi sports markets to begin. No demo markets are substituted for missing live data.')
+
+with smart_tab:
+    st.subheader('Smart combos | 2 to 6 plays')
+    st.warning('RESEARCH ONLY: These combinations use multiplied single-market ask prices, NOT actual Kalshi combo quotes. They do not use independent win predictions or verified injury/news feeds. They are NOT favorable-play recommendations.')
+    rows=st.session_state.get('rows',[])
+    if not rows:
+        st.info('Scan sports markets on the Plays tab first.')
+    else:
+        annotated=[]
+        for r in rows:
+            category,level=classify(r)
+            annotated.append({**r,'category':category,'level':level})
+        categories=sorted({r['category'] for r in annotated})
+        sport=st.selectbox('Combo sport', ['All sports']+categories,key='combo_sport')
+        scoped=[r for r in annotated if sport=='All sports' or r['category']==sport]
+        levels=sorted({r['level'] for r in scoped})
+        level=st.selectbox('Combo level', ['All levels']+levels,key='combo_level')
+        scoped=[r for r in scoped if level=='All levels' or r['level']==level]
+        size=st.select_slider('Number of plays',options=[2,3,4,5,6],value=2)
+        stake=st.number_input('Illustrative stake ($)',min_value=1.0,value=10.0,step=5.0,key='combo_stake')
+        st.caption('Candidate pool limited to 30 markets and 25 results for speed. One leg per event; other correlations are not modeled. Prices can change.')
+        results=candidates(scoped,size,stake)
+        if not results:
+            st.info('Not enough distinct games with quoted prices for this combo size and filter.')
+        else:
+            for item in results:
+                with st.container(border=True):
+                    st.markdown('**'+item['plays']+'**')
+                    st.caption(item['levels']+' • Unverified synthetic scenario')
+                    a,b,c=st.columns(3)
+                    a.metric('Synthetic implied odds',f"{item['synthetic_implied_probability']:.1%}")
+                    b.metric('Hypothetical payout',f"${item['hypothetical_gross_payout']:,.2f}")
+                    c.metric('Profit (ROI)',f"${item['hypothetical_profit']:,.2f}",f"({item['hypothetical_roi_pct']:.1f}%)",delta_color='off')
+            st.download_button('Export scenarios',pd.DataFrame(results).to_csv(index=False),'kalshi_combo_scenarios.csv','text/csv')
 
 with review_tab:
     rows=st.session_state.get('rows',[])
